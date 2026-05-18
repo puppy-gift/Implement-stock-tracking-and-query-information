@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多维度股票实时监控系统</title>
+    <style>
+        :root { --bg: #0a0a14; --surface: #141428; --primary: #00d4aa; --warn: #ffb347; --danger: #ff4757; --text: #e0e0e0; --text-secondary: #8888a0; --border: #222240; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: system-ui, monospace; background:var(--bg); color:var(--text); padding:1rem; min-height:100vh; }
+        .container { max-width:1600px; margin:0 auto; display:flex; flex-direction:column; gap:1rem; min-height:98vh; }
+        .header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; }
+        .header h1 { color:var(--primary); font-size:1.3rem; }
+
+        /* 告警横幅 */
+        .alert-bar { background:var(--danger); color:#fff; padding:0.5rem 1rem; border-radius:8px; display:none; font-size:0.9rem; }
+        .alert-bar.active { display:block; }
+
+        /* 主布局：左右分栏 */
+        .main-layout { flex:1; display:flex; gap:1rem; overflow:hidden; }
+        .left-panel { width:300px; display:flex; flex-direction:column; gap:0.8rem; overflow-y:auto; }
+        .right-panel { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:0.8rem; }
+
+        .card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+        .card h3 { color:var(--primary); font-size:0.95rem; margin-bottom:0.6rem; display:flex; align-items:center; gap:0.4rem; }
+
+        /* 输入 */
+        input, select, button { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:0.45rem 0.7rem; color:var(--text); font-size:0.85rem; }
+        input:focus, select:focus { outline:1px solid var(--primary); }
+        button { background:var(--primary); color:#000; font-weight:700; cursor:pointer; border:none; }
+        button:hover { opacity:0.85; }
+        button.danger { background:var(--danger); color:#fff; }
+        button.warn { background:var(--warn); color:#000; }
+
+        .input-row { display:flex; gap:0.5rem; flex-wrap:wrap; }
+        .input-row input { flex:1; min-width:80px; }
+
+        /* 指标面板 */
+        .metric-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; }
+        .metric-item { background:var(--bg); padding:0.5rem; border-radius:6px; }
+        .metric-label { font-size:0.7rem; color:var(--text-secondary); }
+        .metric-value { font-size:1.1rem; font-weight:700; }
+        .metric-value.positive { color:var(--primary); }
+        .metric-value.negative { color:var(--danger); }
+
+        /* 告警列表 */
+        .alert-item { padding:0.4rem 0.6rem; border-radius:6px; margin-bottom:0.4rem; font-size:0.8rem; display:flex; gap:0.5rem; align-items:center; }
+        .alert-item.warning { background:rgba(255,71,87,0.15); border-left:3px solid var(--danger); }
+        .alert-item.info { background:rgba(0,212,170,0.1); border-left:3px solid var(--primary); }
+        .alert-dot { width:8px; height:8px; border-radius:50%; }
+        .alert-dot.warning { background:var(--danger); }
+        .alert-dot.info { background:var(--primary); }
+
+        /* 新闻列表 */
+        .news-item { padding:0.5rem 0; border-bottom:1px solid var(--border); font-size:0.82rem; }
+        .news-item a { color:#7ec8e3; text-decoration:none; }
+        .news-sentiment { display:inline-block; padding:0.1rem 0.4rem; border-radius:4px; font-size:0.7rem; margin-left:0.4rem; }
+        .sent-pos { background:rgba(0,212,170,0.2); color:var(--primary); }
+        .sent-neg { background:rgba(255,71,87,0.2); color:var(--danger); }
+        .sent-neu { background:rgba(136,136,160,0.2); color:var(--text-secondary); }
+
+        .status-line { font-size:0.8rem; color:var(--text-secondary); }
+        .loader { display:inline-block; width:0.8rem; height:0.8rem; border:2px solid rgba(255,255,255,0.2); border-top:2px solid var(--primary); border-radius:50%; animation:spin 0.7s linear infinite; }
+        @keyframes spin { to {transform:rotate(360deg);} }
+        .hidden { display:none; }
+        .error-text { color:var(--danger); }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>📊 多维度股票实时监控</h1>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <span id="clock" style="font-size:0.85rem; color:var(--text-secondary);"></span>
+            <button onclick="toggleAutoRefresh()" id="auto-btn">⏸ 自动刷新</button>
+        </div>
+    </div>
+
+    <div class="alert-bar" id="alert-bar"></div>
+
+    <div class="main-layout">
+        <!-- 左侧控制面板 -->
+        <div class="left-panel">
+            <div class="card">
+                <h3>🎯 监控配置</h3>
+                <div class="input-row">
+                    <input type="text" id="symbol-input" placeholder="股票代码（000001,600519）" style="flex:2;">
+                    <input type="text" id="keyword-input" placeholder="关键词（可选）" style="flex:1;">
+                </div>
+                <div class="input-row" style="margin-top:0.5rem;">
+                    <input type="number" id="interval-input" value="60" placeholder="间隔（秒）" style="flex:1;">
+                    <button onclick="startMonitor()">▶ 开始监控</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>🤖 AI 配置</h3>
+                <select id="provider" onchange="onProviderChange()" style="width:100%;">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai">ChatGPT (OpenAI)</option>
+                    <option value="grok">Grok (xAI)</option>
+                    <option value="gemini">Gemini (Google)</option>
+                </select>
+                <div class="input-row" style="margin-top:0.5rem;">
+                    <input type="password" id="api-key" placeholder="API密钥">
+                    <button onclick="saveKey()">💾</button>
+                </div>
+                <span id="key-status" class="status-line"></span>
+            </div>
+
+            <div class="card" id="alerts-panel">
+                <h3>🚨 实时告警</h3>
+                <div id="alerts-list" class="status-line">等待数据...</div>
+            </div>
+        </div>
+
+        <!-- 右侧数据面板 -->
+        <div class="right-panel" id="right-panel">
+            <div class="status-line" style="text-align:center; padding:3rem;">
+                ⬅️ 输入股票代码并点击"开始监控"
+            </div>
+
+            <!-- 新闻爬取 + AI总结 独立区块（初始隐藏） -->
+            <div class="card" id="news-summary-card" style="display:none;">
+                <h3>📰 新闻舆情 & AI 总结</h3>
+                <div class="input-row" style="margin-bottom:0.5rem;">
+                    <input type="text" id="summary-keyword-input" placeholder="额外关键词（逗号分隔）" style="flex:2;">
+                    <button onclick="fetchNewsAndSummary()">🔍 爬取并总结</button>
+                </div>
+                <div id="news-list-container" style="max-height:250px; overflow-y:auto; margin-bottom:0.8rem;"></div>
+                <div id="ai-summary-container" style="background:var(--bg); padding:0.8rem; border-radius:8px; white-space:pre-wrap; line-height:1.6; font-size:0.9rem;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let autoRefresh = true;
+    let refreshTimer = null;
+    let currentSymbols = [];
+
+    window.onload = () => { loadKeyForProvider(); updateClock(); setInterval(updateClock, 1000); };
+
+    function updateClock() { document.getElementById('clock').innerText = new Date().toLocaleString(); }
+
+    async function startMonitor() {
+        const symStr = document.getElementById('symbol-input').value.trim();
+        const kwStr = document.getElementById('keyword-input').value.trim();
+        const interval = parseInt(document.getElementById('interval-input').value) || 60;
+        if(!symStr) return alert('请输入股票代码');
+
+        const symbols = symStr.split(',').map(s => s.trim()).filter(s => s);
+        const keywords = kwStr ? kwStr.split(',').map(k => k.trim()).filter(k => k) : [];
+        currentSymbols = symbols;
+
+        // 启动后端定时任务
+        try {
+            await fetch('/monitor/start', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({symbols, keywords, interval})
+            });
+        } catch(e) { console.error(e); }
+
+        // 立即获取一次快照
+        fetchSnapshot(symbols, keywords);
+        // 前端轮询
+        if(refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(() => fetchSnapshot(symbols, keywords), interval * 1000);
+        // 显示新闻区块
+        document.getElementById('news-summary-card').style.display = 'block';
+    }
+
+    async function fetchSnapshot(symbols, keywords) {
+        const panel = document.getElementById('right-panel');
+        // 保留新闻区块
+        const newsCard = document.getElementById('news-summary-card');
+        const panelChildren = Array.from(panel.children);
+        // 移除之前的快照卡片，保留新闻区块
+        panelChildren.forEach(child => { if(child.id !== 'news-summary-card') child.remove(); });
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'status-line';
+        loadingDiv.style.cssText = 'text-align:center; padding:2rem;';
+        loadingDiv.innerHTML = '<span class="loader"></span> 获取数据中...';
+        panel.insertBefore(loadingDiv, newsCard);
+
+        const provider = document.getElementById('provider').value;
+        const apiKey = document.getElementById('api-key').value.trim();
+
+        try {
+            const res = await fetch('/snapshot', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({symbols, keywords, provider, api_key:apiKey})
+            });
+            const data = await res.json();
+            loadingDiv.remove();
+            if(data.error) {
+                const errDiv = document.createElement('div');
+                errDiv.style.color = 'var(--danger)';
+                errDiv.innerText = data.error;
+                panel.insertBefore(errDiv, newsCard);
+                return;
+            }
+            renderSnapshots(data, panel, newsCard);
+            // 拉取告警
+            const alertRes = await fetch('/alerts');
+            const alerts = await alertRes.json();
+            renderAlerts(alerts);
+        } catch(e) {
+            loadingDiv.remove();
+            const errDiv = document.createElement('div');
+            errDiv.style.color = 'var(--danger)';
+            errDiv.innerText = '请求失败: ' + e.message;
+            panel.insertBefore(errDiv, newsCard);
+        }
+    }
+
+    function renderSnapshots(data, panel, newsCard) {
+        for(const [sym, snap] of Object.entries(data)) {
+            const q = snap.quote || {};
+            const t = snap.technicals || {};
+            const f = snap.fundamentals || {};
+            const mf = snap.money_flow || {};
+            const changeClass = (q.change_pct||0) >= 0 ? 'positive' : 'negative';
+            const changeSign = (q.change_pct||0) >= 0 ? '+' : '';
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3>📈 ${sym} · ${q.name||'--'} <span style="font-size:0.8rem; color:var(--text-secondary);">(${q.source||''})</span></h3>
+                <div class="metric-grid">
+                    <div class="metric-item"><div class="metric-label">最新价</div><div class="metric-value">${(q.price||0).toFixed(2)}</div></div>
+                    <div class="metric-item"><div class="metric-label">涨跌幅</div><div class="metric-value ${changeClass}">${changeSign}${(q.change_pct||0).toFixed(2)}%</div></div>
+                    <div class="metric-item"><div class="metric-label">成交量</div><div class="metric-value">${formatVolume(q.volume||0)}</div></div>
+                    <div class="metric-item"><div class="metric-label">换手率</div><div class="metric-value">${(q.turnover_rate||0).toFixed(2)}%</div></div>
+                </div>
+                <div class="metric-grid" style="margin-top:0.5rem;">
+                    <div class="metric-item"><div class="metric-label">RSI(14)</div><div class="metric-value">${t.rsi||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">MACD</div><div class="metric-value">${t.macd||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">布林上轨</div><div class="metric-value">${t.boll_upper||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">布林下轨</div><div class="metric-value">${t.boll_lower||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">KDJ-K</div><div class="metric-value">${t.kdj_k||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">KDJ-D</div><div class="metric-value">${t.kdj_d||'--'}</div></div>
+                </div>
+                <div class="metric-grid" style="margin-top:0.5rem;">
+                    <div class="metric-item"><div class="metric-label">市盈率</div><div class="metric-value">${f.pe||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">市净率</div><div class="metric-value">${f.pb||'--'}</div></div>
+                    <div class="metric-item"><div class="metric-label">总市值</div><div class="metric-value">${formatVolume(f.market_cap||0)}</div></div>
+                    <div class="metric-item"><div class="metric-label">主力净流入</div><div class="metric-value">${formatVolume(mf.main_net_inflow||0)}</div></div>
+                </div>`;
+            panel.insertBefore(card, newsCard);
+        }
+        // 宏观指标（如果有）
+        const firstSnap = Object.values(data)[0];
+        if(firstSnap && firstSnap.macro && firstSnap.macro.status === 'partial') {
+            const macro = firstSnap.macro.indicators || {};
+            const macroCard = document.createElement('div');
+            macroCard.className = 'card';
+            let macroHtml = '<h3>🏛 宏观指标</h3><div class="metric-grid">';
+            for(const [key, val] of Object.entries(macro)) {
+                macroHtml += `<div class="metric-item"><div class="metric-label">${key.toUpperCase()}</div><div class="metric-value">${val.value||'--'}</div><div class="status-line">${val.date||''}</div></div>`;
+            }
+            macroHtml += '</div>';
+            macroCard.innerHTML = macroHtml;
+            panel.insertBefore(macroCard, newsCard);
+        }
+    }
+
+    function renderAlerts(alerts) {
+        const alertsPanel = document.getElementById('alerts-list');
+        const alertBar = document.getElementById('alert-bar');
+        if(!alerts.length) {
+            alertsPanel.innerHTML = '<div class="status-line">✅ 暂无告警</div>';
+            alertBar.classList.remove('active');
+            return;
+        }
+        let html = '';
+        const warnAlerts = alerts.filter(a => a.level === 'warning');
+        if(warnAlerts.length) {
+            alertBar.classList.add('active');
+            alertBar.innerText = `⚠️ ${warnAlerts.length} 条重要告警`;
+        } else {
+            alertBar.classList.remove('active');
+        }
+        for(const a of alerts.slice(0, 10)) {
+            html += `<div class="alert-item ${a.level||'info'}">
+                <span class="alert-dot ${a.level||'info'}"></span>
+                <span>${a.msg}</span>
+            </div>`;
+        }
+        alertsPanel.innerHTML = html;
+    }
+
+    function formatVolume(v) {
+        if(!v) return '0';
+        v = Number(v);
+        if(Math.abs(v) > 1e8) return (v/1e8).toFixed(2) + '亿';
+        if(Math.abs(v) > 1e4) return (v/1e4).toFixed(2) + '万';
+        return v.toFixed(0);
+    }
+
+    function toggleAutoRefresh() {
+        autoRefresh = !autoRefresh;
+        const btn = document.getElementById('auto-btn');
+        btn.innerText = autoRefresh ? '⏸ 自动刷新' : '▶ 手动刷新';
+        btn.className = autoRefresh ? '' : 'warn';
+    }
+
+    // ========== 新闻爬取 & AI 总结 ==========
+    async function fetchNewsAndSummary() {
+        if(!currentSymbols.length) return alert('请先启动监控');
+        const sym = currentSymbols[0];
+        const kwStr = document.getElementById('summary-keyword-input').value.trim();
+        const keywords = kwStr ? kwStr.split(',').map(k => k.trim()).filter(k => k) : [];
+
+        const newsContainer = document.getElementById('news-list-container');
+        const summaryContainer = document.getElementById('ai-summary-container');
+        newsContainer.innerHTML = '<span class="loader"></span> 正在爬取新闻...';
+        summaryContainer.innerHTML = '<span class="loader"></span> AI 正在分析...';
+
+        const provider = document.getElementById('provider').value;
+        const apiKey = document.getElementById('api-key').value.trim();
+
+        // 爬新闻
+        try {
+            const snapRes = await fetch('/snapshot', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({symbols:[sym], keywords, provider, api_key:apiKey})
+            });
+            const snapData = await snapRes.json();
+            const news = (snapData[sym] && snapData[sym].news) || [];
+            let newsHtml = '';
+            news.slice(0, 10).forEach(n => {
+                const sentClass = n.sentiment==='positive'?'sent-pos':(n.sentiment==='negative'?'sent-neg':'sent-neu');
+                newsHtml += `<div class="news-item">
+                    <a href="${n.url}" target="_blank">${n.title}</a><span class="news-sentiment ${sentClass}">${n.sentiment||'--'}</span>
+                    <div class="status-line">${n.source||''} · ${n.time||''}</div>
+                </div>`;
+            });
+            newsContainer.innerHTML = newsHtml || '<div class="status-line">暂无新闻</div>';
+        } catch(e) {
+            newsContainer.innerHTML = `<span class="error-text">新闻爬取失败: ${e.message}</span>`;
+        }
+
+        // AI 总结
+        try {
+            const aiRes = await fetch('/ai_summary', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({symbol:sym, keywords, provider, api_key:apiKey})
+            });
+            const aiData = await aiRes.json();
+            if (aiData.error) {
+                summaryContainer.innerHTML = `<span class="error-text">${aiData.error}</span>`;
+            } else {
+                summaryContainer.innerHTML = aiData.summary;
+            }
+        } catch(e) {
+            summaryContainer.innerHTML = `<span class="error-text">AI 总结失败: ${e.message}</span>`;
+        }
+    }
+
+    // === API Key ===
+    async function loadKeyForProvider() {
+        const p = document.getElementById('provider').value;
+        const res = await fetch(`/get_key/${p}`).catch(()=>{});
+        if(res && res.ok) {
+            const d = await res.json();
+            document.getElementById('api-key').value = d.key || '';
+            document.getElementById('key-status').innerText = d.key ? '✅ 已保存' : '❌ 未保存';
+        }
+    }
+    async function onProviderChange() { await loadKeyForProvider(); }
+    async function saveKey() {
+        const p = document.getElementById('provider').value;
+        const k = document.getElementById('api-key').value.trim();
+        if(!k) return alert('请输入密钥');
+        const res = await fetch('/save_key', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider:p, api_key:k})});
+        const d = await res.json();
+        if(d.success) { document.getElementById('key-status').innerText='✅ 已保存'; alert('已保存'); }
+        else alert(d.error);
+    }
+</script>
+</body>
+</html>
